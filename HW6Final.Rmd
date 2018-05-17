@@ -1,0 +1,449 @@
+---
+title: "HW6"
+author: "Ashish Kumar // ashishk2@illinois.edu"
+output:
+  html_document: default
+  pdf_document: default
+---
+# 1. Linear regression
+```{r message=FALSE}
+rm(list = ls())
+library(stats)
+library(gdata)
+library(caret)
+library(caTools)
+library(glmnet)
+library(plotmo)
+library(MASS)
+library(ModelMetrics)
+library(knitr)
+set.seed(2018)
+origData = read.table("~/cs498aml/music/default_plus_chromatic_features_1059_tracks.txt", header = FALSE, sep = ",")
+```
+
+## Build a straight forward linear regression
+
+```{r}
+reg1.lm = lm(V117 ~ . - V118, data=origData)
+reg1.mse = mean((origData$V117 - reg1.lm$fitted.values)^2)
+reg2.lm = lm(V118 ~ . - V117, data=origData)
+reg2.mse = mean((origData$V118 - reg2.lm$fitted.values)^2)
+rsq_table = data.frame(Model=c("No transformation "), 
+                       LatAIC = c(AIC(reg1.lm)), 
+                       LatBIC = c(BIC(reg1.lm)), 
+                       LongAIC = c(AIC(reg2.lm)), 
+                       LongBIC = c(BIC(reg2.lm)))
+```
+
+### R-Squared values
+
+```{r}
+print(paste("Adjusted R-Squared (Lat.)",summary(reg1.lm)$adj.r.squared))
+print(paste("Adjusted R-Squared (Long.)",summary(reg2.lm)$adj.r.squared))
+print(paste("R-Squared (Lat.)",summary(reg1.lm)$r.squared))
+print(paste("R-Squared (Long.)",summary(reg2.lm)$r.squared))
+print(paste("MSE (Lat.)",reg1.mse))
+print(paste("MSE (Long.)",reg2.mse))
+```
+
+## Plots
+
+```{r}
+ 
+plot(reg1.lm, which=1, main="Fitted values(Lat.)", sub = "")
+
+plot(reg2.lm, which=1, main="Fitted values(Long.)", sub = "")
+```
+
+## Perform Box-Cox transformation
+
+```{r}
+data = read.table("~/cs498aml/music/default_plus_chromatic_features_1059_tracks.txt", header = FALSE, sep = ",")
+data$V117 = data$V117 + 90
+data$V118 = data$V118 + 180
+
+reg3.lm = lm(V117 ~ . - V118, data=data)
+reg4.lm = lm(V118 ~ . - V117, data=data)
+
+bxcxLat = MASS::boxcox(reg3.lm, lambda = seq(-5, 15, 1/10), 
+                   plotit = TRUE, 
+                   xlab = paste(expression(lambda), " (Lat.)"))
+
+bxcxLong = MASS::boxcox(reg4.lm, 
+                    lambda = seq(-5, 15, 1/10), 
+                    plotit = TRUE, 
+                    xlab = paste(expression(lambda), " (Long.)"))
+
+```
+
+## Choose best box cox lambda value
+
+```{r}
+lambdaLat = bxcxLat$x[which(bxcxLat$y == max(bxcxLat$y))]
+lambdaLong = bxcxLong$x[which(bxcxLong$y == max(bxcxLong$y))]
+
+print(paste("Lat : The best value of lamba is ", lambdaLat, " with high log likelihood of ", max(bxcxLat$y)))
+print(paste("Long : The best value of lamba is ", lambdaLong, " with high log likelihood of ", max(bxcxLong$y)))
+```
+
+## Choose best model 
+
+```{r}
+data$V117 = (data$V117^lambdaLat - 1)/lambdaLat
+data$V118 = (data$V118^lambdaLong - 1)/lambdaLong
+bxcxLat.lm = lm(V117 ~ . -V118, data=data)
+bxcxLong.lm = lm(V118 ~ . -V117, data=data)
+
+rsq_table = rbind(rsq_table,
+                  data.frame(Model=c("Box Cox Transformation "), 
+                             LatAIC = c(AIC(bxcxLat.lm)), 
+                             LatBIC = c(BIC(bxcxLat.lm)), 
+                             LongAIC = c(AIC(bxcxLong.lm)), 
+                             LongBIC = c(BIC(bxcxLong.lm))))
+```
+
+### Smaller the AIC or BIC, the better is the model
+
+```{r rsq_table, results = 'markup', warning=FALSE, message=FALSE}
+knitr::kable(rsq_table, format="markdown", digits=6, align=c('c','c','c','c','c'), padding=20, caption="Model Comparison")
+```
+
+> Untransformed model is better because it produced the smallest AIC and BIC for both latitude and longitude. I will use untransformed data for the rest of this exercise
+
+## Unregularized 
+
+```{r}
+data = origData
+noreg1.model = cv.glmnet(as.matrix(data[,-c(117,118)]), data$V117, family="gaussian", lambda = seq(0,0.000001, 0.000001), alpha=0)
+noreg2.model = cv.glmnet(as.matrix(data[,-c(117,118)]), data$V118, family="gaussian", lambda = seq(0,0.000001, 0.000001), alpha=0)
+cv_rslt_table = data.frame(Items=c("Unregularized "), 
+                          CVErrLat = c(noreg1.model$cvm[2]), 
+                          CVErrLong = c(noreg2.model$cvm[2]), 
+                          LambdaLat = c(NA),
+                          LambdaLong = c(NA))
+```
+
+## L2 Regularization
+
+```{r}
+ridge1.model = cv.glmnet(as.matrix(as.matrix(data[,-c(117,118)])), data$V117,  family="gaussian", nlambda = 300, alpha=0)
+idx1 = which(ridge1.model$cvm == min(ridge1.model$cvm))
+ridge2.model = cv.glmnet(as.matrix(as.matrix(data[,-c(117,118)])), data$V118,  family="gaussian", nlambda = 300, alpha=0)
+idx2 = which(ridge2.model$cvm == min(ridge2.model$cvm))
+```
+
+### Plots
+
+```{r}
+plotres(ridge1.model, info=TRUE, which = 1, caption = "Ridge (L2) Lat.")
+plotres(ridge2.model, info=TRUE, which = 1, caption = "Ridge (L2) Long.")
+```
+
+### Best regularization values
+
+```{r}
+
+print(paste("L2 Lamba Lat. ", ridge1.model$lambda[idx1]))
+print(paste("L2 Lamba Long. ", ridge2.model$lambda[idx2]))
+
+cv_rslt_table = rbind(cv_rslt_table,
+                     data.frame(Items=c("Ridge"), 
+                                CVErrLat = c(min(ridge1.model$cvm)), 
+                                CVErrLong = c(min(ridge2.model$cvm)),
+                                LambdaLat = c(ridge1.model$lambda[idx1]),
+                                LambdaLong = c(ridge2.model$lambda[idx2])))
+```
+
+```{r cv_rslt_table, results = 'markup', warning=FALSE, message=FALSE}
+knitr::kable(cv_rslt_table, format="markdown", digits=6, align=c('c','c','c','c','c'), padding=20, caption="CVErr, Lambda Comparison")
+```
+
+> Ridge (L2) Model is better than Unregularized version because it has lower CV Error.
+
+## L1 Regularization
+
+```{r}
+lasso1.model = cv.glmnet(as.matrix(as.matrix(data[,-c(117,118)])), 
+                         data$V117, family="gaussian", nlambda = 300, alpha=1.0)
+lasso2.model = cv.glmnet(as.matrix(as.matrix(data[,-c(117,118)])), 
+                         data$V118, family="gaussian", nlambda = 300, alpha=1.0)
+
+idx1 = which(lasso1.model$cvm == min(lasso1.model$cvm))
+idx2 = which(lasso2.model$cvm == min(lasso2.model$cvm))
+```
+
+###  Plots
+
+```{r}
+plotres(lasso1.model, info=TRUE, which = 1, caption="Lasso (L1) Lat.")
+plotres(lasso2.model, info=TRUE, which = 1, caption="Lasso (L1) Long.")
+```
+
+
+### Best regularization values
+
+```{r}
+print(paste("L1 Lamba Lat. ", lasso1.model$lambda[idx1]))
+print(paste("L1 Lamba Long. ", lasso2.model$lambda[idx2]))
+
+cv_rslt_table2 = data.frame(Items=c("Unregularized"), 
+                           CVErrLat = c(noreg1.model$cvm[2]), 
+                           CVErrLong = c(noreg2.model$cvm[2]), 
+                           LambdaLat = c(NA),
+                           LambdaLong = c(NA),
+                           ParamLat = c(noreg1.model$nzero[2]),
+                           ParamLong = c(noreg2.model$nzero[2]))
+
+
+cv_rslt_table2 = rbind(cv_rslt_table2,
+                     data.frame(Items=c("Lasso"), 
+                                CVErrLat = c(lasso1.model$cvm[idx1]), 
+                                CVErrLong = c(lasso2.model$cvm[idx2]), 
+                                LambdaLat = c(lasso1.model$lambda[idx1]),
+                                LambdaLong = c(lasso2.model$lambda[idx2]),
+                                ParamLat = c(lasso1.model$nzero[idx1]),
+                                ParamLong = c(lasso2.model$nzero[idx2])))
+```
+
+```{r cv_rslt_table2, results = 'markup', warning=FALSE, message=FALSE}
+knitr::kable(cv_rslt_table2, format="markdown", digits=6, align=c('c','c','c','c','c','c','c'), padding=20, caption="CVErr, Lambda, Param Comparison")
+```
+
+> Lasso (L1) Model is better than Unregularized version because it has lower CV Error.
+
+
+## ElasticNet
+
+```{r}
+elnetlat_tbl = data.frame(Items=c("Unregularized"), 
+                            CVErrLat = c(noreg1.model$cvm[2]), 
+                            CVErrLong = c(noreg2.model$cvm[2]), 
+                            LambdaLat = c(NA),
+                            LambdaLong = c(NA),
+                            ParamLat = c(noreg1.model$nzero[2]),
+                            ParamLong = c(noreg2.model$nzero[2]))
+
+for (l in c(0.2,0.5,0.8)) {
+  elnet1.model = cv.glmnet(as.matrix(as.matrix(data[,-c(117,118)])), data$V117, 
+                           family="gaussian", nlambda = 300, alpha=l)
+  idx1 = which(elnet1.model$cvm == min(elnet1.model$cvm))
+  elnet2.model = cv.glmnet(as.matrix(as.matrix(data[,-c(117,118)])), data$V118, 
+                           family="gaussian", nlambda = 300, alpha=l)
+  idx2 = which(elnet2.model$cvm == min(elnet2.model$cvm))
+  elnetlat_tbl = rbind(elnetlat_tbl,
+                       data.frame(Items=c(paste("ElasticNet ", l)), 
+                                  CVErrLat = c(elnet1.model$cvm[idx1]), 
+                                  CVErrLong = c(elnet2.model$cvm[idx2]), 
+                                  LambdaLat = c(elnet1.model$lambda[idx1]),
+                                  LambdaLong = c(elnet2.model$lambda[idx2]),
+                                  ParamLat = c(elnet1.model$nzero[idx1]),
+                                  ParamLong = c(elnet2.model$nzero[idx2])))
+  
+  ###  part(a) Plots, Best regularization values
+  plotres(elnet1.model, info=TRUE, which = 1, caption=paste("Alpha = ",l))
+  print(paste("L1 Lamba Lat. ", elnet1.model$lambda[idx1]))
+  
+  plotres(elnet2.model, info=TRUE, which = 1,caption=paste("Alpha = ",l))
+  print(paste("L1 Lamba Long. ", elnet2.model$lambda[idx2]))
+  
+}
+
+```
+
+```{r elnetlat_tbl, results = 'markup', warning=FALSE, message=FALSE}
+knitr::kable(elnetlat_tbl, format="markdown", digits=6, align=c('c','c','c','c','c','c','c'), padding=20, caption="CVErr, Lambda, Param Comparison")
+```
+
+> ElasticNet with alpha of 0.5 produced smallest CV Error for Latitude. However for longitude parameter, the smallest CV Error is produced by alpha of 0.8. The values are also the best values amongs all models compared in this exercise.
+
+# 2. Logistic regression 
+
+```{r message=FALSE}
+options(scipen = 0)
+rm(list = ls())
+library(stats)
+library(ggplot2)
+library(gdata)
+library(caret)
+library(caTools)
+library(glmnet)
+library(plotmo)
+library(ggplot2)
+set.seed(2018)
+```
+
+
+```{r}
+webLink = "http://archive.ics.uci.edu/ml/machine-learning-databases/00350/default%20of%20credit%20card%20clients.xls"
+localLink = "~/cs498aml/default of credit card clients.xls"
+data2 = read.xls(localLink, header = TRUE, sheet = 1)
+data2[,3] = as.factor(data2[,3]) #gender
+data2[,4] = as.factor(data2[,4]) #education
+data2[,5] = as.factor(data2[,5]) # marriage 
+data = data2[,-c(1)] #index column adds no value, ditch it
+idx = createDataPartition(y=data$Y, p = 0.8, list=FALSE)
+trainData = data[idx,]
+testData = data[-idx,]
+
+```
+
+## General Regularized Model
+
+### Plot Residual plot for generalized linear model
+
+```{r}
+#glm.model = glm(data.matrix(data[,-c(24)]), as.factor(data$Y), family="binomial")
+
+glm.model = glm(Y ~ ., data = data, family="binomial")
+p = c(1,nrow(data))
+for (i in 1:length(glm.model$fitted.values)) { 
+  if (glm.model$fitted.values[i] < 0.5) {
+    p[i] = 0
+  } else {
+      p[i] = 1}
+}
+print(paste("GLM Accuracy =", mean(p == data$Y)))
+
+```
+
+
+
+
+```{r}
+plotres(glm.model, which = c(1,3), npoints=40000, caption="Residual Plots")
+
+```
+
+## UnRegularized Model
+
+```{r}
+unreg.model = cv.glmnet(data.matrix(trainData[,-c(24)]), as.factor(trainData$Y), family="binomial", 
+                        type.measure="class", lambda=c(0,1e-7), alpha=0)
+yhat0 = predict(unreg.model, s = unreg.model$lambda[2], 
+                type="class", newx = data.matrix(testData[,-24]))
+
+print(paste("Unreg. Model Accuracy =",  mean(as.factor(yhat0) == testData$Y) ))
+
+```
+
+
+## Identify Optimal regularization values
+
+### L1,L2 and three Alphas in Elastic Net Regression 
+
+```{r}
+lasso.model = cv.glmnet(data.matrix(trainData[,-c(24)]), as.factor(trainData$Y), family="binomial", 
+                        type.measure="class", nlambda = 300, alpha=1.0)
+lasso.minIdx = which.min(lasso.model$cvm)
+ridge.model = cv.glmnet(data.matrix(trainData[,-c(24)]), as.factor(trainData$Y), family="binomial", 
+                        type.measure="class", nlambda = 300, alpha=0)
+ridge.minIdx = which.min(ridge.model$cvm)
+for (l in c(0.2,0.5,0.7)) {
+  assign(paste("elnet.model", l*10, sep=""), cv.glmnet(data.matrix(trainData[,-c(24)]), as.factor(trainData$Y), 
+                                                       family="binomial", type.measure="class", nlambda = 300, alpha=l))
+}
+
+elnet.model2.minIdx = which.min(elnet.model2$cvm)
+elnet.model5.minIdx = which.min(elnet.model5$cvm)
+elnet.model7.minIdx = which.min(elnet.model7$cvm)
+
+```
+
+```{r}
+
+result_table = data.frame(Model=c("Unregularized "), 
+                       NumParams = c(as.vector(unreg.model$nzero[2])), 
+                       Lambda= c(NA),
+                       CrossVal.Err = c(unreg.model$cvm[2]))
+
+result_table = rbind(result_table,
+                      data.frame(Model=c("Lasso (L1) "), 
+                       NumParams = c(as.vector(lasso.model$nzero[lasso.minIdx])), 
+                       Lambda = c(lasso.model$lambda[lasso.minIdx]),
+                       CrossVal.Err = c(lasso.model$cvm[lasso.minIdx])))
+
+result_table = rbind(result_table,
+                      data.frame(Model=c("Ridge (L2) "), 
+                       NumParams = c(as.vector(ridge.model$nzero[ridge.minIdx])), 
+                       Lambda = c(ridge.model$lambda[ridge.minIdx]),
+                       CrossVal.Err = c(ridge.model$cvm[ridge.minIdx])))
+
+result_table = rbind(result_table,
+                      data.frame(Model=c("Elnet (0.2) "), 
+                       NumParams = c(as.vector(elnet.model2$nzero[elnet.model2.minIdx])), 
+                       Lambda = c(elnet.model2$lambda[elnet.model2.minIdx]),
+                       CrossVal.Err = c(elnet.model2$cvm[elnet.model2.minIdx])))
+
+result_table = rbind(result_table,
+                      data.frame(Model=c("Elnet (0.5) "), 
+                       NumParams = c(as.vector(elnet.model5$nzero[elnet.model5.minIdx])), 
+                       Lambda = c(elnet.model5$lambda[elnet.model5.minIdx]),
+                       CrossVal.Err = c(elnet.model5$cvm[elnet.model5.minIdx])))
+
+result_table = rbind(result_table,
+                      data.frame(Model=c("Elnet (0.7) "), 
+                       NumParams = c(as.vector(elnet.model7$nzero[elnet.model7.minIdx])), 
+                       Lambda = c(elnet.model7$lambda[elnet.model7.minIdx]),
+                       CrossVal.Err = c(elnet.model7$cvm[elnet.model7.minIdx])))
+
+```
+
+
+### CV Error vs Log Lambda plot
+
+```{r}
+ plot(log(result_table$Lambda[2:6]), 
+          result_table$CrossVal.Err[2:6], type="p", 
+          ylim=c(0.1902,0.1940), xlim=c(-7.5,-3), pch=19,
+          xlab="log lambda", ylab="CV Error")
+ text(log(result_table$Lambda[2:6]), 
+      result_table$CrossVal.Err[2:6],
+      labels = result_table$Model[2:6],
+      cex =0.8,
+      pos=1)
+```
+
+### Model Comparison table
+
+```{r result_table, results = 'markup', warning=FALSE, message=FALSE}
+knitr::kable(result_table, format="markdown", digits=6, align=c('c','c','c','c'), padding=20, caption="Model Comparison")
+```
+
+>The best Cross validated error value among regularized models is obtained through elnet model with alpha value of 0.7.
+
+
+### Predict values and calculate accuracy
+
+```{r}
+yhat1 = predict(lasso.model, s = lasso.model$lambda[lasso.minIdx], 
+                type="class", newx = data.matrix(testData[,-24]))
+
+yhat2 = predict(ridge.model, s = ridge.model$lambda[ridge.minIdx], 
+                type="class", newx = data.matrix(testData[,-24]))
+
+yhat3 = predict(elnet.model2, s = elnet.model2$lambda[elnet.model2.minIdx], 
+                type="class", newx = data.matrix(testData[,-24]))
+
+yhat4 = predict(elnet.model5, s = elnet.model5$lambda[elnet.model5.minIdx], 
+                type="class", newx = data.matrix(testData[,-24]))
+
+yhat5 = predict(elnet.model7, s = elnet.model7$lambda[elnet.model7.minIdx], 
+                type="class", newx = data.matrix(testData[,-24]))
+
+
+acc= c(1:5)
+
+acc[1] = mean(as.factor(yhat2) == testData$Y) 
+acc[2] = mean(as.factor(yhat3) == testData$Y)
+acc[3] = mean(as.factor(yhat4) == testData$Y)
+acc[4] = mean(as.factor(yhat5) == testData$Y)
+acc[5] = mean(as.factor(yhat1) == testData$Y)
+
+
+plot(c(0,0.2,0.5,0.7,1.0), acc, type="o", xlab="Alpha", pch=19, ylab="Accuracy", sub=paste("Max Accuracy = ",max(acc)))
+```
+
+## Conclusion
+
+> The best accuray amongst regularized model is obtained with elasticnet model (alpha = 0.5). The best overall accuracy is achieved with unregularized model. 
+

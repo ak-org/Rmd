@@ -1,0 +1,340 @@
+---
+title: "Homework 7"
+author:
+- Gitika Jain (gitikaj2)
+- Ashish Kumar (ashishk2)
+date: "04/08/2018"
+output:
+  pdf_document:
+    keep_tex: yes
+    latex_engine: xelatex
+  html_document: default
+---
+
+## 1 EM Topic models
+
+We have loaded the NIPS dataset which has  1500 documents, and 12419 unique words. We have implemented EM topic model to cluster these 1500 documents into 30 topics. 
+
+We have followed below steps for EM topic model
+
+1. Initialzed $\pi_j$ and $p_j$ :
+
+    + First, we used random initialization for probabilities $\pi_j$ which is the likelihood that arbitrary item is in cluster j. We made sure that sum of $\pi_j$ is 1.
+    
+    + To initialize $p_j$: We collect all the words found in a cluster then Normalize them, multiply the probabilty of seen words with .95 and distribute remaining 0.05 among unseen words. We made sure that all probabilities are positive and sum of each topic’s word probabilities is 1.
+
+2. In E step we calculate the weights. We have implemented E step using log space and then convert the result to normal by using the exp of result. 
+
+3. In M step we adjust the value of $\pi_j$ and $p_j$. 
+
+    + We have used absolute difference between values of weight in iterations to check for convergence with threshold of 1e-7.
+
+
+```{r echo = FALSE, warning = FALSE}
+rm(list = ls())
+# Loading libraries
+suppressPackageStartupMessages(library(stats))
+suppressPackageStartupMessages(library(matrixStats))
+suppressPackageStartupMessages(library(Matrix))
+suppressPackageStartupMessages(library(knitr))
+suppressPackageStartupMessages(library(jpeg))
+suppressPackageStartupMessages(library(OpenImageR))
+suppressPackageStartupMessages(library(raster))
+```
+
+
+```{r echo=TRUE, warning=FALSE}
+set.seed(2018)
+# "/home/gitika/Downloads/HW7Final" 
+# "/Users/ashishkumar/cs498aml/"
+path = "/Users/ashishkumar/cs498aml/"
+setwd(path)
+docWords = readLines("docword.nips.txt", n = 3)
+vocabWords = read.csv("vocab.nips.txt", stringsAsFactors = FALSE, header = FALSE)
+docCount = as.integer(docWords[1])
+wordVocabCount = as.integer(docWords[2])
+wordCollCount = as.integer(docWords[3])
+docs = read.csv("docword.nips.txt", sep = " ", skip = 3, header = FALSE)
+TOPICS = 30
+SMOOTHING = .000001
+STOPAT = 1e-7
+a_mat = matrix(0, docCount, wordVocabCount)
+for (i in 1:wordCollCount) {
+  a_mat[docs[i,1], docs[i,2]] = docs[i,3]
+}
+pi_j = matrix(0, 1, TOPICS)
+pi_j = runif(TOPICS)/sum(runif(TOPICS))
+samples<-sample(c(1:30), size = 1500, replace = TRUE)
+p_j = matrix(0, nrow = TOPICS, ncol=wordVocabCount)
+prob_j = matrix(0, nrow = TOPICS, ncol=wordVocabCount)
+for (p in 1:TOPICS) {
+  elements = a_mat[which(samples==p ),]
+  if (is.vector(elements)) {
+    totalWordsInCluster = elements
+  } else {
+    totalWordsInCluster = colSums(elements)
+  }
+  prob_j[p,] = totalWordsInCluster
+}
+normalized_prob_j<-scale(prob_j, center=FALSE, scale=colSums(prob_j))
+p_j<-.95* normalized_prob_j
+for (col in seq(wordVocabCount)) {
+  zero_prob_words_length<-length(which(p_j[,col]==0))+length(which(is.na(p_j[,col])))
+  prob_for_zeroitems<-.05/zero_prob_words_length
+  idx<-c(which(p_j[,col]==0),which(is.na(p_j[,col])) )
+  for (c in 1:length(idx)) {
+    p_j[idx[c],col]<-prob_for_zeroitems
+  }
+}
+wtsij_n = matrix(NA, nrow=docCount, ncol=TOPICS)
+# Run max 100 iteration if it doesn't converge
+for (iteration in 1:100) {
+  
+  if (iteration > 1) {
+    wtsij_n = wijs
+    #print(paste("wtsij_n*****", iteration))
+  }
+  
+  #E Step - calculate the expected value of log liklihood:
+  #[1500*30] sums of features multiplied by probs for each doc and cluster
+  inner = a_mat %*% t(log(p_j)) 
+  woweights = matrix(0,docCount, TOPICS) #wts each cluster 
+  #add logs of the PIs
+  for(i in seq(TOPICS)){
+    woweights[,i] = inner[,i] + log(pi_j[i])
+  }
+  #calculate w_ij s
+  w = matrix(0,docCount, TOPICS)
+  wijs = matrix(0,docCount, TOPICS)  
+  rowmax = apply(woweights, 1, max)
+  w = woweights - unlist(as.list(rowmax))
+  unnormalwijs = exp(w) 
+  for(i in seq(docCount)){
+    wijs[i,] = unnormalwijs[i,] / sum(unnormalwijs[i,])
+  }
+  #print(paste("wtsij*****", iteration))
+  #M Step - update PIs and probs
+  for(j in seq(TOPICS)){
+    #ucomment next two lines to Update p's with additive smoothing 
+    top = colSums(a_mat * wijs[,j]) + SMOOTHING
+    bottom = sum(rowSums(a_mat) * wijs[,j]) + (SMOOTHING * wordVocabCount)
+    p_j[j,] = top/bottom
+    #update PIs
+    pi_j[j] = sum(wijs[,j]) / docCount
+  }
+  
+  #stopping rule
+  if (!any(is.na(wtsij_n))) {
+    subtraction <- abs(wtsij_n - wijs)
+    #print(paste("max difference in weight is ",  max(subtraction)))
+    if (max(subtraction) < STOPAT) {
+      break
+    }
+  }
+}
+```
+
+### (a) Below is the plot showing the probabilities of selecting a topic. 
+
+```{r echo=TRUE, warning=FALSE}
+barplot(pi_j,names.arg = seq(1:30),xlab = "Topic",ylab = "probability",col = "grey",
+        main = "Topic Probability",border = "black")
+```
+
+### (b) Below is the list of top 10 words choosen in 30 Topics by EM Topic Model algorithm.
+
+```{r echo=TRUE, warning=FALSE}
+## output 10 words in decreasing order of probability for each of 30 topics 
+library(kableExtra)
+wordTopicList = c()
+for (i in seq(TOPICS)) {
+  topTenIdx = sort(p_j[i,], decreasing = TRUE, index.return=TRUE)$ix[1:10]
+  wordTopicList = rbind(wordTopicList, c(vocabWords[topTenIdx,]))
+}
+wordTopicList = matrix(wordTopicList, nrow=TOPICS)
+rownames(wordTopicList) = paste("Topic", seq(TOPICS),sep='')
+colnames(wordTopicList) = paste("Word", seq(10),sep=' ')
+knitr::kable(wordTopicList, format = "latex", booktabs = T, caption = "Top 10 words for topics")%>%
+  kable_styling(latex_options = c("striped", "scale_down"))%>%
+    column_spec(1, bold = T, color = "blue")
+```
+
+> The most common words in the table above are : network, model, neural, training, data, algorithm, function, input and learning. All these words are related to NIPS documents. Also, the algorithm is able to identify unique set of words for each topic. None of the two topics has all same set of words.
+
+## 2 Image segmentation using EM
+
+We have implemented Image segmentation using EM algorithm for Mixture Normals.
+
+### (a) 10, 20 and 50 segments for the images
+
+    
+We have followed below steps for EM Mixture normals:
+
+1. We changed the scale of pixel values to 0-255. This allowed k-means algorithm to find centers more accurately.
+
+2. Initialzed $\pi$ and $\mu$:
+
+    + First, we used K-means for initializing both $\mu$ and $\pi$. Here $\mu$ is the cluster centers of all the clusters and $\pi$ is the probability of an item being in a cluster.  
+    
+3. In E step we calculate the weights using $\pi$ and $\mu$. We didn’t use log space here, instead we implemented by subtracting the square of the smallest distance to a cluster which is d_min^2.
+
+4. In M step we adjust the value of $\pi$ and $\mu$ based on the weight.
+
+5. We have used absolute difference between values of weight in iterations to check for convergence with threshold of 1e-7.
+
+
+
+
+```{r em2, warning=FALSE, echo=TRUE}
+## part b
+myEuclid <- function(points1, points2) {
+  distanceMatrix <- matrix(NA, nrow=dim(points1)[1], ncol=dim(points2)[1])
+  for(i in 1:nrow(points2)) {
+    distanceMatrix[,i] <- sqrt(rowSums(t(t(points1)-points2[i,])^2))
+  }
+  return(distanceMatrix)
+}
+imageEM <- function(path, image, seg, seed) {
+  set.seed(seed)
+  myImage <- readJPEG(paste(path,image,'.jpg', sep = ''))
+  imageDim = dim(myImage) # H X W X channels
+  imageHeight = imageDim[1]
+  imageWidth = imageDim[2]
+  STOP_THRESH = 1e-7
+  numPixels = imageHeight  * imageWidth
+  pxMatrix = matrix(0, numPixels, 3)
+  #reshape pixel info in two dimension array to faciliate mean and dist calculation later
+  for (i in 1:imageHeight) {
+    for (j in 1:imageWidth) {
+      pxMatrix[((i - 1)*imageWidth) + j, ] = myImage[i,j,]
+    }
+  }
+  pxMatrix = round(255 * pxMatrix)
+  
+  km2 = kmeans(pxMatrix, centers=seg, algorithm="Lloyd", nstart=5, iter.max = 1000)
+  pxPI = matrix(1/seg, 1, seg)
+  pxPI = km2$size/sum(km2$size)
+  meanMatrix = matrix(runif(imageDim[3] * seg), nrow=seg)
+  meanMatrix = km2$centers
+  wtsij_n = matrix(NA, nrow=numPixels, ncol=seg)
+  # Run max 1000 iteration if it doesn't converge
+  for (iteration in 1:1000) {
+    ## E Steps    
+    ## expect value of log likelihood
+    distanceMatrix<-myEuclid(pxMatrix, meanMatrix)
+    mins<-apply(distanceMatrix, 1, min) 
+    inner <- matrix(0, numPixels, seg)
+    for (i in seq(seg)) {
+      temp <- t(t(pxMatrix) - meanMatrix[i, ])
+      inner[, i] <-  rowSums((temp ^ 2 ))# - (mins*(ones) ^ 2))
+    }
+    ones <- matrix(1, nrow=numPixels, ncol=seg)
+    inner <- inner-(mins*ones)^2
+    inner <- (-.5) *inner
+    
+    ## calculate weights
+    if (iteration > 1) {
+      wtsij_n = wtsij
+    }
+    wtsij_nom <- (exp(inner) %*% diag(pxPI[1:seg])) 
+    wtsij <- wtsij_nom / (rowSums(wtsij_nom))
+    #print(paste("wtsij*****", iteration))
+    
+    ## M-Step
+    for (j in seq(seg)) {
+      meanMatrix[j, ] <- (colSums(pxMatrix * wtsij[, j])) / (sum(wtsij[, j]))  
+      pxPI[j] <- sum(wtsij[, j]) / numPixels   
+    }
+    
+    if (!any(is.na(wtsij_n))) {
+      subtraction <- abs(wtsij_n - wtsij)
+      #print(paste("max difference in weight is ",  max(subtraction)))
+      if (max(subtraction) < STOP_THRESH) {
+        break
+      }
+    }
+  } 
+  
+  pxMatrix = scale(pxMatrix)
+  ## put together final image
+  outImg = array(0, c(imageHeight, imageWidth, imageDim[3]))
+  for (i in 1:imageHeight) {
+    for(j in 1:imageWidth) {
+      idx = ((i-1) * imageWidth) + j
+      pt = pxMatrix[idx, ] 
+      meanSegment = which(wtsij[idx,] == max(wtsij[idx,]))
+      outImg[i,j,] = meanMatrix[meanSegment,]/255
+    }
+  }
+  outFname = paste(path,image,'_', seg, seed, '.jpg', sep='')
+  writeJPEG(outImg, outFname, quality = 1)
+  #print(paste("Saved Image ", outFname))
+  outFname
+}
+imagesFromEM<-vector()
+imageNames<- c("RobertMixed03","smallsunset" ,"smallstrelitzia")
+seed <- 1492
+seg <- c(10,20,50)
+for (img in imageNames) {
+  for (s in seg) {
+   imagesFromEM <- cbind(imagesFromEM, imageEM(path, img, s, seed))
+  }
+}
+```
+
+
+
+
+```{r warning=FALSE, echo=TRUE}
+seedEMImg <-vector() 
+seedList<- c(2018, 18000, 2, 43, 347)
+for (s in seedList) {
+  seedEMImg <- cbind(seedEMImg, imageEM(path, imageNames[2], seg=20, s))
+}
+```
+
+ 
+
+### Conclusion for segmented sunset image with different seed values
+
+> There are subtle differences in the 20 segment sunset images with different seed values. The seed value is used by k-means algorithm to determine cluster centers. Different seed value will cause k-means algorithm to return slightly different centers resulting in pixels being clustered around slightly different centers.
+
+
+### Result Images
+
+> As is evident in the result images below, as we increase the number of segments, the result images becomes closer to the original image provided.
+
+![RobertMixed03.jpg - 10 segments.](`r imagesFromEM[1]`)
+
+![RobertMixed03.jpg - 20 segments.](`r imagesFromEM[2]`)
+
+![RobertMixed03.jpg - 50 segments.](`r imagesFromEM[3]`)
+
+![smallsunset.jpg - 10 segments.](`r imagesFromEM[4]`)
+
+![smallsunset.jpg - 20 segments.](`r imagesFromEM[5]`)
+
+![smallsunset.jpg - 50 segments.](`r imagesFromEM[6]`)
+
+![smallstrelitzia.jpg - 10 segments.](`r imagesFromEM[7]`)
+
+![smallstrelitzia.jpg - 20 segments.](`r imagesFromEM[8]`)
+
+![smallstrelitzia.jpg- 50 segments.](`r imagesFromEM[9]`)
+
+
+### (b) Segment 'smallsunset.jpg' into 20 segments using five different start points
+
+![smallsunset.jpg - seed 2018.](`r seedEMImg[1]`)
+
+![smallsunset.jpg - seed 18000.](`r seedEMImg[2]`)
+
+![smallsunset.jpg - seed 2.](`r seedEMImg[3]`)
+
+![smallsunset.jpg - seed 43.](`r seedEMImg[4]`)
+
+![smallsunset.jpg - seed 347.](`r seedEMImg[5]`)
+
+
+
+
